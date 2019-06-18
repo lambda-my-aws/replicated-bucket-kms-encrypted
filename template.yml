@@ -1,0 +1,208 @@
+Conditions:
+  IsDestinationRegion: !Equals
+    - !Ref 'ReplicaRegion'
+    - !Ref 'AWS::Region'
+  IsSourceRegion: !Equals
+    - !Ref 'SourceRegion'
+    - !Ref 'AWS::Region'
+Description: Template to create Replicated Bucket
+Metadata:
+  Author: https://github.com/johnpreston
+  Date: '2019-06-26T13:28:56.466145'
+Outputs:
+  RoleArn:
+    Value: !If
+      - IsSourceRegion
+      - !GetAtt 'ReplicationRole.Arn'
+      - NoWhatWeNeedHere
+Parameters:
+  BucketName:
+    AllowedPattern: '[a-z0-9-]+'
+    Type: String
+  ReplicaRegion:
+    AllowedValues:
+      - eu-north-1
+      - ap-south-1
+      - eu-west-3
+      - eu-west-2
+      - eu-west-1
+      - ap-northeast-2
+      - ap-northeast-1
+      - sa-east-1
+      - ca-central-1
+      - ap-southeast-1
+      - ap-southeast-2
+      - eu-central-1
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+    Type: String
+  SourceRegion:
+    AllowedValues:
+      - eu-north-1
+      - ap-south-1
+      - eu-west-3
+      - eu-west-2
+      - eu-west-1
+      - ap-northeast-2
+      - ap-northeast-1
+      - sa-east-1
+      - ca-central-1
+      - ap-southeast-1
+      - ap-southeast-2
+      - eu-central-1
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+    Type: String
+Resources:
+  BucketEncryptionKey:
+    Properties:
+      KeyPolicy:
+        Statement:
+          - Action:
+              - kms:*
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Resource:
+              - '*'
+            Sid: Allow administration of the key
+        Version: '2012-10-17'
+    Type: AWS::KMS::Key
+  BucketEncryptionKeyAlias:
+    Properties:
+      AliasName: !Sub 'alias/${AWS::Region}/${BucketName}'
+      TargetKeyId: !GetAtt 'BucketEncryptionKey.Arn'
+    Type: AWS::KMS::Alias
+  ReplicaBucketPolicy:
+    Condition: IsDestinationRegion
+    Properties:
+      Bucket: !Ref 'ReplicatedBucket'
+      PolicyDocument:
+        Id: S3ReplicationPolicy
+        Statement:
+          - Action:
+              - s3:GetBucketVersioning
+              - s3:PutBucketVersioning
+              - s3:ReplicateObject
+              - s3:ReplicateDelete
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Resource:
+              - !Sub 'arn:aws:s3:::${ReplicatedBucket}'
+              - !Sub 'arn:aws:s3:::${ReplicatedBucket}/*'
+            Sid: S3ReplicationPolicy
+        Version: '2008-10-17'
+    Type: AWS::S3::BucketPolicy
+  ReplicatedBucket:
+    DependsOn:
+      - BucketEncryptionKey
+      - BucketEncryptionKeyAlias
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref 'BucketEncryptionKey'
+              SSEAlgorithm: aws:kms
+      BucketName: !Sub '${BucketName}-${AWS::Region}'
+      LifecycleConfiguration:
+        Rules:
+          - AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 3
+            NoncurrentVersionExpirationInDays: 1
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: !If
+                  - IsSourceRegion
+                  - 31
+                  - 14
+      ReplicationConfiguration: !If
+        - IsSourceRegion
+        - Role: !GetAtt 'ReplicationRole.Arn'
+          Rules:
+            - Destination:
+                Bucket: !Sub 'arn:${AWS::Partition}:s3:::${BucketName}-${ReplicaRegion}'
+                EncryptionConfiguration:
+                  ReplicaKmsKeyID:
+                    Fn::Transform:
+                      - Name: cfnmacro-kmskey
+                        Parameters:
+                          KeyRegion: !Ref ReplicaRegion
+                          KeyAlias: !Sub 'alias/${ReplicaRegion}/${BucketName}'
+              Prefix: ''
+              SourceSelectionCriteria:
+                SseKmsEncryptedObjects:
+                  Status: Enabled
+              Status: Enabled
+        - !Ref 'AWS::NoValue'
+      VersioningConfiguration:
+        Status: Enabled
+    Type: AWS::S3::Bucket
+  ReplicationRole:
+    Condition: IsSourceRegion
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - !Sub 's3.${AWS::URLSuffix}'
+        Version: '2012-10-17'
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - kms:Decrypt
+                Condition:
+                  StringLike:
+                    kms:ViaService: !Sub 's3.${SourceRegion}.${AWS::URLSuffix}'
+                Effect: Allow
+                Resource:
+                  - !GetAtt 'BucketEncryptionKey.Arn'
+              - Action:
+                  - kms:Encrypt
+                Condition:
+                  StringLike:
+                    kms:ViaService: !Sub 's3.${ReplicaRegion}.${AWS::URLSuffix}'
+                Effect: Allow
+                Resource:
+                  - Fn::Transform:
+                      - Name: cfnmacro-kmskey
+                        Parameters:
+                          KeyRegion: !Ref ReplicaRegion
+                          KeyAlias: !Sub 'alias/${ReplicaRegion}/${BucketName}'
+            Version: '2012-10-17'
+          PolicyName: !Sub 'KMSAccess'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:ListBucket
+                  - s3:GetReplicationConfiguration
+                  - s3:GetObjectVersionForReplication
+                  - s3:GetObjectVersionAcl
+                  - s3:GetObjectVersionTagging
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BucketName}-${SourceRegion}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BucketName}-${SourceRegion}/*'
+              - Action:
+                  - s3:ReplicateObject
+                  - s3:ReplicateDelete
+                  - s3:ReplicateTags
+                  - s3:GetObjectVersionTagging
+                Effect: Allow
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BucketName}-${ReplicaRegion}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BucketName}-${ReplicaRegion}/*'
+            Version: '2012-10-17'
+          PolicyName: S3ReplicationAccess
+    Type: AWS::IAM::Role
+

@@ -1,0 +1,14 @@
+[
+    {
+	"ParameterKey": "SourceRegion",
+	"ParameterValue": "eu-west-1"
+    },
+    {
+	"ParameterKey": "ReplicaRegion",
+	"ParameterValue": "us-east-1"
+    },
+    {
+	"ParameterKey": "BucketName",
+	"ParameterValue": "john-replicated"
+    }
+]

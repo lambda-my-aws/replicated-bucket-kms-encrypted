@@ -1,0 +1,9 @@
+*~
+*.pyc
+*pycache*
+*.json
+*.yml
+*.zip
+*venv*
+!params.json
+!template.yml

@@ -1,0 +1,3 @@
+boto3
+troposphere
+git+https://github.com/lambda-my-aws/ozone@class/organization#egg-info
